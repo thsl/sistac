@@ -659,7 +659,11 @@ var toolBarOnly = true;
             toggleZoomOverlay(false);
         }
     };
-      
+
+    
+    var zoomLastTimestamp = 0;
+    var zoomLastDirection = 0;
+    var disableChunkedZoomEvents = false;
     function zoomWheelHandler(event) {
         if (event.ctrlKey || event.metaKey) {
             event.stopPropagation();
@@ -668,16 +672,78 @@ var toolBarOnly = true;
             if (wheelEvent) {
                 const { deltaY } = normalizeZoomWheelEvent(wheelEvent);
 
+                let timestamp = wheelEvent.timeStamp / 1e3;
+                const direction = Math.sign(deltaY);
+                if (disableChunkedZoomEvents && timestamp - zoomLastTimestamp < .4 && direction == zoomLastDirection) {
+                    // ignore chunked events
+                    return;
+                } else {
+                    // disable stickiness
+                    disableChunkedZoomEvents = false;
+                }
+                zoomLastTimestamp = timestamp;
+                zoomLastDirection = direction;
+
                 const zoom = getCurrentZoom();
                 const zoomStep = deltaY < 0 ? zoom * 0.0409 + 0.0415 : zoom * 0.0394 + 0.0367;
+                let newZoom = roundZoomValue(zoom + zoomStep * -deltaY);
+                
+                if ((zoom > 100 && newZoom <= 100) || (zoom < 100 && newZoom >= 100)) {
+                    // enable stickiness
+                    newZoom = 100;
+                    disableChunkedZoomEvents = true;
+                }
 
-                const newZoom = roundZoomValue(zoom + zoomStep * -deltaY);
                 const zoomPositionX = wheelEvent.clientX * zoom / 100 - zoom / 100;
                 const zoomPositionY = wheelEvent.clientY * zoom / 100 - zoom / 100;
                 const zoomPosition = { x: zoomPositionX, y: zoomPositionY };
                 dropScaleAndZoomPage(newZoom, zoomPosition);
             }
         }
+    }
+
+    var gestureStartZoom = 0;
+    var gesturePrevZoom = 0;
+    var gestureRaf;
+    function zoomGestureStart(e) {
+        e.preventDefault();
+        gestureStartZoom = gesturePrevZoom = getCurrentZoom();
+    };
+
+    function zoomGestureChange(e) {
+        e.preventDefault();
+        if (gestureRaf !== undefined) {
+            cancelAnimationFrame(gestureRaf)
+        }
+        gestureRaf = requestAnimationFrame(function () {
+            let timestamp = e.timeStamp / 1e3;
+            const direction = Math.sign(e.scale - 1);            
+            if (disableChunkedZoomEvents && timestamp - zoomLastTimestamp < .5 && direction == zoomLastDirection) {
+                // ignore chunked events
+                return;
+            } else {
+                // disable stickiness
+                disableChunkedZoomEvents = false;
+            }
+            zoomLastTimestamp = timestamp;
+            zoomLastDirection = direction;
+
+            var zoom = roundZoomValue(gestureStartZoom * e.scale);
+            
+            if ((gesturePrevZoom > 100 && zoom <= 100) || (gesturePrevZoom < 100 && zoom >= 100)) {                
+                // enable stickiness
+                zoom = 100;
+                disableChunkedZoomEvents = true;
+            }
+            gesturePrevZoom = zoom;
+
+            var zoomPosition = { x: e.pageX, y: e.pageY };
+            dropScaleAndZoomPage(zoom, zoomPosition);
+        });
+    }
+
+    var zoomGestureEnd = function (e) {
+        e.preventDefault();
     }
 
     function scrollWheelHandler(event) {
@@ -708,7 +774,7 @@ var toolBarOnly = true;
                 setPagePosition({ x: pagePosition.x, y: pagePosition.y });
             }
         }
-    }
+    }    
     
     function panAndZoomMouseUpHandler() {
         stopDrag();
@@ -768,45 +834,21 @@ var toolBarOnly = true;
                     // Safari specific
                     // Safari emit gesture event instead of wheel event if touchpad used.
 
-                    var gestureStartZoom = 0;
-                    var gestureRaf;
-
-                    var gestureStart = function (e) {
-                        e.preventDefault();
-                        gestureStartZoom = getCurrentZoom();
-                    };
-
-                    var gestureChange = function (e) {
-                        e.preventDefault();
-                        if (gestureRaf !== undefined) {
-                            cancelAnimationFrame(gestureRaf)
-                        }
-                        gestureRaf = requestAnimationFrame(function () {
-                            var zoom = roundZoomValue(gestureStartZoom * e.scale);
-                            var zoomPosition = { x: e.pageX, y: e.pageY };
-                            dropScaleAndZoomPage(zoom, zoomPosition);
-                        });
-                    }
-
-                    var gestureEnd = function (e) {
-                        e.preventDefault();
-                    }
-
                     // remove already added listeners
-                    window.removeEventListener("gesturestart", gestureStart, { capture: true });
-                    window.removeEventListener("gesturechange", gestureChange, { capture: true });
-                    window.removeEventListener("gestureend", gestureEnd, { capture: true });
+                    window.removeEventListener("gesturestart", zoomGestureStart, { capture: true });
+                    window.removeEventListener("gesturechange", zoomGestureChange, { capture: true });
+                    window.removeEventListener("gestureend", zoomGestureEnd, { capture: true });
 
                     // attaching to both window and iframeWindow as sometimes events
                     // this is because how weirdly iframe is positioned in Safari
                     // and doesn't occupy the full space, thus gesture events trigger only on parent window
-                    window.addEventListener("gesturestart", gestureStart, { capture: true });
-                    window.addEventListener("gesturechange", gestureChange, { capture: true });
-                    window.addEventListener("gestureend", gestureEnd, { capture: true });
+                    window.addEventListener("gesturestart", zoomGestureStart, { capture: true });
+                    window.addEventListener("gesturechange", zoomGestureChange, { capture: true });
+                    window.addEventListener("gestureend", zoomGestureEnd, { capture: true });
 
-                    iframeWindow.addEventListener("gesturestart", gestureStart, { capture: true });
-                    iframeWindow.addEventListener("gesturechange", gestureChange, { capture: true });
-                    iframeWindow.addEventListener("gestureend", gestureEnd, { capture: true });
+                    iframeWindow.addEventListener("gesturestart", zoomGestureStart, { capture: true });
+                    iframeWindow.addEventListener("gesturechange", zoomGestureChange, { capture: true });
+                    iframeWindow.addEventListener("gestureend", zoomGestureEnd, { capture: true });
                 }
             }
         })();
